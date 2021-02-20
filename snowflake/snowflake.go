@@ -2,86 +2,55 @@ package snowflake
 
 import (
 	"errors"
-	"fmt"
 	"sync"
 	"time"
 )
 
-var (
-	//global var
-	sequence = 0
-	lastTime = -1
-
-	//every segment bit
-	workerIdBits     = 5
-	datacenterIdBits = 5
-	sequenceBits     = 12
-
-	//every segment max number
-	maxWorkerId     = -1 ^ (-1 << workerIdBits)
-	maxDatacenterId = -1 ^ (-1 << datacenterIdBits)
-	maxSequenceId   = -1 ^ (-1 << sequenceBits)
-
-	//bit operation shift
-	workerIdShift   = sequenceBits
-	datacenterShift = workerIdBits + sequenceBits
-	timestampShift  = datacenterIdBits + workerIdBits + sequenceBits
+const (
+	workerBits  uint8 = 10
+	numberBits  uint8 = 12
+	workerMax   int64 = -1 ^ (-1 << workerBits)
+	numberMax   int64 = -1 ^ (-1 << numberBits)
+	timeShift   uint8 = workerBits + numberBits
+	workerShift uint8 = numberBits
+	startTime   int64 = 1525705533000 // 如果在程序跑了一段时间修改了epoch这个值 可能会导致生成相同的ID
 )
 
-type Snowflake struct {
-	datacenterId int
-	workerId     int
-	epoch        int
-	mt           *sync.Mutex
+type Worker struct {
+	mu        sync.Mutex
+	timestamp int64
+	workerId  int64
+	number    int64
 }
 
-func NewSnowflake(datacenterId, workerId, epoch int) (*Snowflake, error) {
-	if datacenterId > maxDatacenterId || datacenterId < 0 {
-		return nil, errors.New(fmt.Sprintf("datacenterId cant be greater than %d or less than 0", maxDatacenterId))
+func NewWorker(workerId int64) (*Worker, error) {
+	if workerId < 0 || workerId > workerMax {
+		return nil, errors.New("Worker ID excess of quantity")
 	}
-	if workerId > maxWorkerId || workerId < 0 {
-		return nil, errors.New(fmt.Sprintf("workerId cant be greater than %d or less than 0", maxWorkerId))
-	}
-	if epoch > getCurrentTime() {
-		return nil, errors.New(fmt.Sprintf("epoch time cant be after now"))
-	}
-	sf := Snowflake{datacenterId, workerId, epoch, new(sync.Mutex)}
-	return &sf, nil
+	// 生成一个新节点
+	return &Worker{
+		timestamp: 0,
+		workerId:  workerId,
+		number:    0,
+	}, nil
 }
 
-func (sf *Snowflake) GetUniqueId() int {
-	sf.mt.Lock()
-	defer sf.mt.Unlock()
-	//get current time
-	currentTime := getCurrentTime()
-	//compute sequence
-	if currentTime < lastTime {
-		currentTime = waitUntilNextTime(lastTime)
-	} else if currentTime == lastTime {
-		sequence = (sequence + 1) & maxSequenceId
-		if sequence == 0 {
-			currentTime = waitUntilNextTime(lastTime)
+func (w *Worker) GetId() int64 {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	now := time.Now().UnixNano() / 1e6
+	if w.timestamp == now {
+		w.number++
+		if w.number > numberMax {
+			for now <= w.timestamp {
+				now = time.Now().UnixNano() / 1e6
+			}
 		}
-	} else if currentTime > lastTime {
-		sequence = 0
-		lastTime = currentTime
+	} else {
+		w.number = 0
+		w.timestamp = now
 	}
-	//generate id
-	return (currentTime-sf.epoch)<<timestampShift |
-		sf.datacenterId<<datacenterShift |
-		sf.workerId<<workerIdShift |
-		sequence
+	ID := int64((now-startTime)<<timeShift | (w.workerId << workerShift) | (w.number))
+	return ID
 }
 
-func waitUntilNextTime(lasttime int) int {
-	currentTime := getCurrentTime()
-	for currentTime <= lasttime {
-		time.Sleep(1 * time.Second / 1000) //sleep micro second
-		currentTime = getCurrentTime()
-	}
-	return currentTime
-}
-
-func getCurrentTime() int {
-	return int(time.Now().UnixNano() / 1e6) //micro second
-}
