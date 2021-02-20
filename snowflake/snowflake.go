@@ -1,4 +1,4 @@
-package snowflake
+package main
 
 import (
 	"errors"
@@ -49,7 +49,7 @@ func NewSnowflake(datacenterId, workerId, epoch int) (*Snowflake, error) {
 	return &sf, nil
 }
 
-func (sf *Snowflake) getUniqueId() int {
+func (sf *Snowflake) GetUniqueId() int {
 	sf.mt.Lock()
 	defer sf.mt.Unlock()
 	//get current time
